@@ -1,6 +1,6 @@
 <div align=center>
 
-<img width="250" height="312" src="https://github.com/HibiKier/zhenxun-utils/blob/main/docs_image/tt.jpg"/>
+<img width="250" height="312" src="https://github.com/zhenxun-org/zhenxun-utils/blob/main/docs_image/tt.jpg"/>
 
 </div>
 
@@ -25,7 +25,7 @@ _✨ 小真寻的工具类依赖 ✨_
 >
 > <div align="center"><b>小真寻也很可爱呀，也会很喜欢你！</b></div>
 >
-> <div align="center"><img width="235" height="235" src="https://github.com/HibiKier/zhenxun-utils/blob/main/docs_image/tt3.png"/><img width="235" height="235" src="https://github.com/HibiKier/zhenxun-utils/blob/main/docs_image/tt1.png"/><img width="235" height="235" src="https://github.com/HibiKier/zhenxun-utils/blob/main/docs_image/tt2.png"/></div>
+> <div align="center"><img width="235" height="235" src="https://github.com/zhenxun-org/zhenxun-utils/blob/main/docs_image/tt3.png"/><img width="235" height="235" src="https://github.com/zhenxun-org/zhenxun-utils/blob/main/docs_image/tt1.png"/><img width="235" height="235" src="https://github.com/zhenxun-org/zhenxun-utils/blob/main/docs_image/tt2.png"/></div>
 
 ## 💿 安装
 
