@@ -1,23 +1,25 @@
-from collections.abc import Awaitable, Callable
-from typing import Literal
-
 import httpx
 import nonebot
-from nonebot import logger
+from nonebot import require
 from nonebot.adapters import Bot
-from nonebot.utils import is_coroutine_callable
-from nonebot_plugin_alconna.uniseg import Target, UniMessage
-from nonebot_plugin_uninfo import Uninfo, get_interface
+
+require("nonebot_plugin_alconna")
+require("nonebot_plugin_uninfo")
+
+from nonebot_plugin_alconna.uniseg import Receipt, Target, UniMessage
+from nonebot_plugin_uninfo import SceneType, Uninfo, get_interface
+from nonebot_plugin_uninfo.model import Member
 from pydantic import BaseModel
 
 from .http_utils import AsyncHttpx
+from .log import logger
 from .message import MessageUtils
 
 driver = nonebot.get_driver()
 
 
 class UserData(BaseModel):
-    name: str
+    name: str | None
     """昵称"""
     card: str | None = None
     """名片/备注"""
@@ -25,6 +27,8 @@ class UserData(BaseModel):
     """用户id"""
     group_id: str | None = None
     """群组id"""
+    channel_id: str | None = None
+    """频道id"""
     role: str | None = None
     """角色"""
     avatar_url: str | None = None
@@ -33,7 +37,176 @@ class UserData(BaseModel):
     """加入时间"""
 
 
+class GroupData(BaseModel):
+    group_id: str
+    """群组id"""
+    group_name: str | None
+    """群组名称"""
+    channel_id: str | None = None
+    """频道id"""
+
+
 class PlatformUtils:
+    @classmethod
+    async def ban_user(cls, bot: Bot, user_id: str, group_id: str, duration: int):
+        """禁言
+
+        参数:
+            bot: Bot
+            user_id: 用户id
+            group_id: 群组id
+            duration: 禁言时长(分钟)
+        """
+        if cls.get_platform(bot) == "qq":
+            await bot.set_group_ban(
+                group_id=int(group_id),
+                user_id=int(user_id),
+                duration=duration * 60,
+            )
+
+    @classmethod
+    async def get_group_member_list(cls, bot: Bot, group_id: str) -> list[UserData]:
+        """获取群组/频道成员列表
+
+        参数:
+            bot: Bot
+            group_id: 群组/频道id
+
+        返回:
+            list[UserData]: 用户数据列表
+        """
+        if interface := get_interface(bot):
+            members: list[Member] = await interface.get_members(
+                SceneType.GROUP, group_id
+            )
+            return [
+                UserData(
+                    name=member.user.name or "",
+                    card=member.nick,
+                    user_id=member.user.id,
+                    group_id=group_id,
+                    role=member.role.id if member.role else "",
+                    avatar_url=member.user.avatar,
+                    join_time=int(member.joined_at.timestamp())
+                    if member.joined_at
+                    else None,
+                )
+                for member in members
+            ]
+        return []
+
+    @classmethod
+    async def get_friend_list(cls, bot: Bot) -> tuple[list[UserData], str]:
+        """获取好友列表
+
+        参数:
+            bot: Bot
+
+        返回:
+            list[FriendUser]: 好友列表
+        """
+        if interface := get_interface(bot):
+            user_list = await interface.get_users()
+            return [
+                UserData(user_id=u.id, name=u.name) for u in user_list
+            ], cls.get_platform(bot)
+        return [], ""
+
+    @classmethod
+    async def get_group_list(
+        cls, bot: Bot, only_group: bool = False
+    ) -> tuple[list[GroupData], str]:
+        """获取群组列表
+
+        参数:
+            bot: Bot
+            only_group: 是否只获取群组（不获取channel）
+
+        返回:
+            tuple[list[GroupConsole], str]: 群组列表, 平台
+        """
+        if not (interface := get_interface(bot)):
+            return [], ""
+        platform = cls.get_platform(bot)
+        result_list = []
+        scenes = await interface.get_scenes(SceneType.GROUP)
+        for scene in scenes:
+            group_id = scene.id
+            result_list.append(
+                GroupData(
+                    group_id=scene.id,
+                    group_name=scene.name,
+                )
+            )
+            if not only_group and platform != "qq":
+                if channel_list := await interface.get_scenes(parent_scene_id=group_id):
+                    result_list.extend(
+                        GroupData(
+                            group_id=scene.id,
+                            group_name=channel.name,
+                            channel_id=channel.id,
+                        )
+                        for channel in channel_list
+                    )
+        return result_list, platform
+
+    @classmethod
+    async def get_user(
+        cls,
+        bot: Bot,
+        user_id: str,
+        group_id: str | None = None,
+        channel_id: str | None = None,
+    ) -> UserData | None:
+        """获取用户信息
+
+        参数:
+            bot: Bot
+            user_id: 用户id
+            group_id: 群组id.
+            channel_id: 频道id.
+
+        返回:
+            UserData | None: 用户数据
+        """
+        if not (interface := get_interface(bot)):
+            return None
+        member = None
+        user = None
+        if channel_id:
+            member = await interface.get_member(
+                SceneType.CHANNEL_TEXT, channel_id, user_id
+            )
+            if member:
+                user = member.user
+        elif group_id:
+            member = await interface.get_member(SceneType.GROUP, group_id, user_id)
+            if member:
+                user = member.user
+        else:
+            user = await interface.get_user(user_id)
+        if not user:
+            return None
+        return (
+            UserData(
+                name=user.name or "",
+                card=member.nick,
+                user_id=user.id,
+                group_id=group_id,
+                channel_id=channel_id,
+                role=member.role.id if member.role else None,
+                join_time=(
+                    int(member.joined_at.timestamp()) if member.joined_at else None
+                ),
+            )
+            if member
+            else UserData(
+                name=user.name or "",
+                user_id=user.id,
+                group_id=group_id,
+                channel_id=channel_id,
+            )
+        )
 
     @classmethod
     async def get_user_avatar(
@@ -87,7 +260,37 @@ class PlatformUtils:
                     try:
                         return (await client.get(url)).content
                     except Exception:
-                        logger.error("获取群头像错误", "Util")
+                        logger.error(
+                            "获取群头像错误", "Util", target=gid, platform=platform
+                        )
+        return None
+
+    @classmethod
+    async def send_message(
+        cls,
+        bot: Bot,
+        user_id: str | None,
+        group_id: str | None,
+        message: str | UniMessage,
+    ) -> Receipt | None:
+        """发送消息
+
+        参数:
+            bot: Bot
+            user_id: 用户id
+            group_id: 群组id或频道id
+            message: 消息文本
+
+        返回:
+            Receipt | None: 是否发送成功
+        """
+        if target := cls.get_target(user_id=user_id, group_id=group_id):
+            send_message = (
+                MessageUtils.build_message(message)
+                if isinstance(message, str)
+                else message
+            )
+            return await send_message.send(target=target, bot=bot)
         return None
 
     @classmethod
@@ -113,7 +316,7 @@ class PlatformUtils:
     @classmethod
     def get_target(
         cls,
-        bot: Bot,
+        *,
         user_id: str | None = None,
         group_id: str | None = None,
         channel_id: str | None = None,
@@ -130,118 +333,10 @@ class PlatformUtils:
             target: 对应平台Target
         """
         target = None
-        platform = cls.get_platform(bot)
-        if platform == "qq":
-            if group_id:
-                target = Target(group_id)
-            elif user_id:
-                target = Target(user_id, private=True)
-        elif platform in ["kaiheila", "kook", "dodo"]:
-            if group_id and channel_id:
-                target = Target(channel_id, parent_id=group_id, channel=True)
-            elif user_id:
-                target = Target(user_id, private=True)
+        if group_id and channel_id:
+            target = Target(channel_id, parent_id=group_id, channel=True)
+        elif group_id:
+            target = Target(group_id)
+        elif user_id:
+            target = Target(user_id, private=True)
         return target
-
-
-async def broadcast_group(
-    message: str | UniMessage,
-    bot: Bot | list[Bot] | None = None,
-    bot_id: str | set[str] | None = None,
-    ignore_group: set[int] | None = None,
-    check_func: Callable[[Bot, str], Awaitable] | None = None,
-    log_cmd: str | None = None,
-    platform: Literal["qq", "dodo", "kaiheila"] | None = None,
-):
-    """获取所有Bot或指定Bot对象广播群聊
-
-    参数:
-        message: 广播消息内容
-        bot: 指定bot对象.
-        bot_id: 指定bot id.
-        ignore_group: 忽略群聊列表.
-        check_func: 发送前对群聊检测方法，判断是否发送.
-        log_cmd: 日志标记.
-        platform: 指定平台
-    """
-    if platform and platform not in ["qq", "dodo", "kaiheila"]:
-        raise ValueError("指定平台不支持")
-    if not message:
-        raise ValueError("群聊广播消息不能为空")
-    bot_dict = nonebot.get_bots()
-    bot_list: list[Bot] = []
-    if bot:
-        if isinstance(bot, list):
-            bot_list = bot
-        else:
-            bot_list.append(bot)
-    elif bot_id:
-        _bot_id_list = bot_id
-        if isinstance(bot_id, str):
-            _bot_id_list = [bot_id]
-        for id_ in _bot_id_list:
-            if bot_id in bot_dict:
-                bot_list.append(bot_dict[bot_id])
-            else:
-                logger.warning(f"Bot:{id_} 对象未连接或不存在")
-    else:
-        bot_list = list(bot_dict.values())
-    _used_group = []
-    for _bot in bot_list:
-        try:
-            if platform and platform != PlatformUtils.get_platform(_bot):
-                continue
-            if not (interface := get_interface(_bot)):
-                continue
-            scenes = await interface.get_scenes()
-            if group_list := [s for s in scenes if s.is_group or s.is_channel]:
-                for group in group_list:
-                    group_id = group.id
-                    channel_id = None
-                    if group.is_channel and group.parent:
-                        group_id = group.parent.id
-                        channel_id = group.id
-                    key = f"{group_id}:{channel_id}"
-                    try:
-                        if (
-                            ignore_group
-                            and (group_id in ignore_group or channel_id in ignore_group)
-                        ) or key in _used_group:
-                            logger.debug(
-                                f"群组: {group_id}:{channel_id} | {log_cmd} 广播方法群组重复, 已跳过..."
-                            )
-                            continue
-                        is_run = False
-                        if check_func:
-                            if is_coroutine_callable(check_func):
-                                is_run = await check_func(_bot, group_id)
-                            else:
-                                is_run = check_func(_bot, group_id)
-                        if not is_run:
-                            logger.debug(
-                                f"群组: {group_id}:{channel_id} | {log_cmd} 广播方法检测运行方法为 False, 已跳过...",
-                            )
-                            continue
-                        if target := PlatformUtils.get_target(
-                            _bot, None, group_id, channel_id
-                        ):
-                            _used_group.append(key)
-                            message_list = message
-                            await MessageUtils.build_message(message_list).send(
-                                target, _bot
-                            )
-                            logger.debug(
-                                f"群组: {group_id}:{channel_id} | {log_cmd} 发送成功"
-                            )
-                        else:
-                            logger.warning(
-                                f"群组: {group_id}:{channel_id} | {log_cmd} target为空"
-                            )
-                    except Exception as e:
-                        logger.error(
-                            f"群组: {group_id}:{channel_id} | {log_cmd} 发送失败 {type(e)}:{e}"
-                        )
-        except Exception as e:
-            logger.error(
-                f"Bot: {_bot.self_id} | {log_cmd} 获取群聊列表失败 {type(e)}:{e}"
-            )
